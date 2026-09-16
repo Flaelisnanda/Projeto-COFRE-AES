@@ -1,6 +1,9 @@
 import os
+
 from dotenv import load_dotenv
 from supabase import Client, create_client
+
+from app.cripto import de_b64, para_b64
 
 load_dotenv()  # lê o arquivo .env
 
@@ -15,6 +18,15 @@ if not supabase_url or not supabase_key:
 supabase: Client = create_client(supabase_url, supabase_key)
 
 
+def _normalizar_b64(valor: bytes | str | None) -> str | None:
+    """Converte bytes para Base64 para persistência segura no banco."""
+    if valor is None:
+        return None
+    if isinstance(valor, str):
+        return valor
+    return para_b64(valor)
+
+
 # ---------------------------------------------------------------
 # Cofres
 # ---------------------------------------------------------------
@@ -22,21 +34,21 @@ supabase: Client = create_client(supabase_url, supabase_key)
 def inserir_cofre(
     cofre_id: str,
     nome: str,
-    kdf_sal: str,
+    kdf_sal: str | bytes,
     kdf_iteracoes: int,
-    verificador_nonce: str,
-    verificador_criptograma: str,
-    verificador_etiqueta: str,
+    verificador_nonce: str | bytes,
+    verificador_criptograma: str | bytes,
+    verificador_etiqueta: str | bytes,
 ) -> None:
     """Grava um novo cofre. Usada pela rota POST /cofres."""
     supabase.table("cofres").insert({
         "id": cofre_id,
         "nome": nome,
-        "kdf_sal": kdf_sal,
+        "kdf_sal": _normalizar_b64(kdf_sal),
         "kdf_iteracoes": kdf_iteracoes,
-        "verificador_nonce": verificador_nonce,
-        "verificador_criptograma": verificador_criptograma,
-        "verificador_etiqueta": verificador_etiqueta,
+        "verificador_nonce": _normalizar_b64(verificador_nonce),
+        "verificador_criptograma": _normalizar_b64(verificador_criptograma),
+        "verificador_etiqueta": _normalizar_b64(verificador_etiqueta),
     }).execute()
 
 
@@ -44,7 +56,13 @@ def buscar_cofre(cofre_id: str) -> dict | None:
     """Busca um cofre pelo identificador. Devolve None se não existir."""
     resposta = supabase.table("cofres").select("*").eq("id", cofre_id).execute()
     registros = resposta.data
-    return registros[0] if registros else None
+    if not registros:
+        return None
+
+    registro = dict(registros[0])
+    if "kdf_sal" in registro and isinstance(registro["kdf_sal"], str):
+        registro["kdf_sal_bytes"] = de_b64(registro["kdf_sal"])
+    return registro
 
 
 # ---------------------------------------------------------------
@@ -60,9 +78,9 @@ def inserir_segredo(
     titulo: str | None = None,
     usuario: str | None = None,
     url: str | None = None,
-    nonce: str | None = None,
-    criptograma: str | None = None,
-    etiqueta: str | None = None,
+    nonce: str | bytes | None = None,
+    criptograma: str | bytes | None = None,
+    etiqueta: str | bytes | None = None,
 ) -> None:
     """Grava um novo segredo cifrado.
 
@@ -86,9 +104,9 @@ def inserir_segredo(
         "titulo": titulo or nome,
         "usuario": usuario,
         "url": url,
-        "nonce": nonce,
-        "criptograma": criptograma,
-        "etiqueta": etiqueta,
+        "nonce": _normalizar_b64(nonce),
+        "criptograma": _normalizar_b64(criptograma),
+        "etiqueta": _normalizar_b64(etiqueta),
     }
 
     if segredo_id:
@@ -124,15 +142,14 @@ def buscar_segredo(cofre_id: str, segredo_id: str) -> dict | None:
 def atualizar_segredo(
     cofre_id: str,
     segredo_id: str,
-    nonce: str,
-    criptograma: str,
-    etiqueta: str,
+    nonce: str | bytes,
+    criptograma: str | bytes,
+    etiqueta: str | bytes,
 ) -> None:
-    
     supabase.table("segredos").update({
-        "nonce": nonce,
-        "criptograma": criptograma,
-        "etiqueta": etiqueta,
+        "nonce": _normalizar_b64(nonce),
+        "criptograma": _normalizar_b64(criptograma),
+        "etiqueta": _normalizar_b64(etiqueta),
     }).eq("cofre_id", cofre_id).eq("id", segredo_id).execute()
 
 
