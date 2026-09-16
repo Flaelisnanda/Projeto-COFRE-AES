@@ -1,102 +1,62 @@
-"""Módulo de criptografia do projeto."""
+"""AES-256-GCM e PBKDF2 conforme a Seção 9 do projeto."""
 
 import base64
-import hashlib
-from os import urandom as get_random_bytes
 
-from cryptography.exceptions import InvalidTag
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from Crypto.Cipher import AES
+from Crypto.Hash import SHA256
+from Crypto.Protocol.KDF import PBKDF2
+from Crypto.Random import get_random_bytes
 
 ITERACOES_PADRAO = 210_000
 TAMANHO_CHAVE = 32
 TAMANHO_SAL = 16
 TAMANHO_NONCE = 12
+FRASE_VERIFICADORA = "cofre-ok"
 
 
 def para_b64(dados: bytes) -> str:
-    """Converte bytes para string em Base64."""
-    return base64.b64encode(dados).decode("utf-8")
+    return base64.b64encode(dados).decode("ascii")
 
 
-def de_b64(valor: str) -> bytes:
-    """Converte string em Base64 para bytes."""
-    return base64.b64decode(valor.encode("utf-8"))
+def de_b64(texto: str) -> bytes:
+    return base64.b64decode(texto, validate=True)
 
 
 def gerar_sal() -> bytes:
-    """Gera um salt aleatório para uso na derivação da chave."""
     return get_random_bytes(TAMANHO_SAL)
 
 
 def derivar_chave(senha_mestra: str, sal: bytes, iteracoes: int) -> bytes:
-    """Deriva uma chave criptográfica a partir de uma senha e um salt."""
-    senha_bytes = senha_mestra.encode("utf-8")
-    return hashlib.pbkdf2_hmac(
-        "sha256",
-        senha_bytes,
-        sal,
-        iteracoes,
-        dklen=TAMANHO_CHAVE,
-    )
+    return PBKDF2(senha_mestra.encode("utf-8"), sal, dkLen=TAMANHO_CHAVE,
+                  count=iteracoes, hmac_hash_module=SHA256)
 
 
 def montar_aad_segredo(cofre_id: str, segredo_id: str) -> bytes:
-    """Monta o AAD para um segredo no formato 'cofre_id|segredo_id'."""
     return f"{cofre_id}|{segredo_id}".encode("utf-8")
 
 
-def cifrar(chave: bytes, texto_claro: bytes | str, aad: bytes | str) -> tuple[str, str, str]:
-    """Criptografa um texto com AES-GCM usando um nonce novo em cada chamada."""
-    if isinstance(texto_claro, str):
-        texto_claro = texto_claro.encode("utf-8")
-    if isinstance(aad, str):
-        aad = aad.encode("utf-8")
-
+def cifrar(chave: bytes, texto_claro: str, aad: bytes) -> tuple[str, str, str]:
     nonce = get_random_bytes(TAMANHO_NONCE)
-    cripto = AESGCM(chave).encrypt(nonce, texto_claro, aad)
-    texto_criptografado = cripto[:-16]
-    etiqueta = cripto[-16:]
-    return para_b64(nonce), para_b64(texto_criptografado), para_b64(etiqueta)
+    cifra = AES.new(chave, AES.MODE_GCM, nonce=nonce)
+    cifra.update(aad)
+    criptograma, etiqueta = cifra.encrypt_and_digest(texto_claro.encode("utf-8"))
+    return para_b64(nonce), para_b64(criptograma), para_b64(etiqueta)
 
 
-def decifrar(
-    chave: bytes,
-    nonce_b64: str,
-    cripto_b64: str,
-    etiqueta_b64: str,
-    aad: bytes | str,
-) -> bytes:
-    """Descriptografa um texto com AES-GCM e deixa ValueError subir."""
-    if isinstance(aad, str):
-        aad = aad.encode("utf-8")
-
-    nonce = de_b64(nonce_b64)
-    texto_criptografado = de_b64(cripto_b64)
-    etiqueta = de_b64(etiqueta_b64)
-
-    try:
-        return AESGCM(chave).decrypt(nonce, texto_criptografado + etiqueta, aad)
-    except InvalidTag as exc:
-        raise ValueError("Dados criptografados inválidos ou AAD incorreto") from exc
+def decifrar(chave: bytes, nonce_b64: str, cripto_b64: str,
+             etiqueta_b64: str, aad: bytes) -> str:
+    """Verifica a etiqueta antes de devolver texto; deixa ValueError subir."""
+    cifra = AES.new(chave, AES.MODE_GCM, nonce=de_b64(nonce_b64))
+    cifra.update(aad)
+    return cifra.decrypt_and_verify(de_b64(cripto_b64), de_b64(etiqueta_b64)).decode("utf-8")
 
 
 def criar_verificador(chave: bytes, cofre_id: str) -> tuple[str, str, str]:
-    """Cria um verificador para validar a senha mestra do cofre."""
-    aad = montar_aad_segredo(cofre_id, "verificador")
-    return cifrar(chave, "cofre-ok", aad)
+    return cifrar(chave, FRASE_VERIFICADORA, cofre_id.encode())
 
 
-def senha_mestra_correta(
-    chave: bytes,
-    nonce: str,
-    cripto: str,
-    etiqueta: str,
-    cofre_id: str,
-) -> bool:
-    """Retorna True se a senha mestra for correta, e False em caso de dado inválido."""
-    aad = montar_aad_segredo(cofre_id, "verificador")
+def senha_mestra_correta(chave, nonce, cripto, etiqueta, cofre_id) -> bool:
     try:
-        texto = decifrar(chave, nonce, cripto, etiqueta, aad)
+        return decifrar(chave, nonce, cripto, etiqueta, cofre_id.encode()) == FRASE_VERIFICADORA
     except ValueError:
         return False
-    return texto == b"cofre-ok"
