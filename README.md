@@ -151,7 +151,7 @@ X-Senha-Mestra: <senha-mestra>
 2. O sistema gera um salt aleatório e deriva uma chave PBKDF2.
 3. A frase verificação `cofre-ok` é cifrada e armazenada no registro do cofre.
 4. O usuário adiciona um segredo com título, dados opcionais e senha.
-5. O segredo é cifrado com AES-GCM usando o AAD `cofre_id|segredo_id`.
+5. O segredo é cifrado com AES-GCM utilizando o AAD `cofre_id|segredo_id`.
 6. O banco recebe somente informações em Base64 e metadados não sensíveis.
 7. Ao ler o segredo, a API valida a senha mestra, verifica a etiqueta GCM e decifra o valor.
 
